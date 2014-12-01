@@ -123,6 +123,10 @@ mdspr2
 Target Var(TARGET_DSPR2)
 Use MIPS-DSP REV 2 instructions.
 
+mdspr3
+Target Var(TARGET_DSPR3)
+Use MIPS-DSP Rev 3 instructions.
+
 mdebug
 Target Var(TARGET_DEBUG_MODE) Undocumented
 
@@ -512,3 +516,6 @@ Use Loongson EXTension (EXT) instructions.
 mloongson-ext2
 Target Var(TARGET_LOONGSON_EXT2)
 Use Loongson EXTension R2 (EXT2) instructions.
+
+mforbidden-slots
+Target Undocumented Var(TARGET_FORBIDDEN_SLOTS) Init(1)
