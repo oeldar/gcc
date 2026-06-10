@@ -293,6 +293,7 @@ foreach option {
     paired-single
     plt
     shared
+    shrink-offsets
     smartmips
     sym32
     synci

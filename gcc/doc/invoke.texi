@@ -1236,6 +1236,7 @@ Objective-C and Objective-C++ Dialects}.
 -G@var{num}  -mno-local-sdata  -mno-extern-sdata  -mno-gopt
 -membedded-data  -muninit-const-in-rodata
 -mcode-readable=@var{setting}  -mno-data-in-code  -mcode-xonly
+-mshrink-offsets -mno-shrink-offsets
 -msplit-addresses  -mexplicit-relocs  -mexplicit-relocs=@var{release}
 -mno-check-zero-division  -mdivide-traps  -mdivide-breaks
 -mno-load-store-pairs
@@ -29580,6 +29581,16 @@ useful on targets that are configured to have a dual instruction/data
 SRAM interface but that (unlike the M4K) do not automatically redirect
 PC-relative loads to the instruction RAM.
 @end table
+
+@opindex mshrink-offsets
+@opindex mno-shrink-offsets
+@item -mshrink-offsets
+@itemx -mno-shrink-offsets
+Enable (disable) an optimisation to reduce offsets used directly in
+memory references for MIPS16 code to make more use of 16-bit instructions
+for loads and stores.  This is at the expense of one additional setup
+instruction to adjust the base pointer for several memory references.
+This optimisation is enabled by default with @option{-Os}.
 
 On SDE targets, @option{-mcode-data-in-code} is available as a
 traditional alias for @option{-mcode-readable=no}, and @option{-mcode-xonly}
