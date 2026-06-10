@@ -150,6 +150,10 @@ Maximum size (in bytes) of objects tracked bytewise by dead store elimination.
 Common Joined UInteger Var(param_early_inlining_insns) Init(6) Optimization Param
 Maximal estimated growth of function body caused by early inlining of single call.
 
+-param=early-inlining-insns-cold=
+Common Joined UInteger Var(param_early_inlining_insns_cold) Init(0) Optimization Param
+Maximal estimated growth of function body caused by early inlining of cold call.
+
 -param=file-cache-files=
 Common Joined UInteger Var(param_file_cache_files) Init(16) Param
 Maximum number of files in the file cache.
@@ -653,6 +657,10 @@ The maximum number of instructions when inlining for size.
 -param=max-inline-insns-small=
 Common Joined UInteger Var(param_max_inline_insns_small) Optimization Param
 The maximum number of instructions when automatically inlining small functions.
+
+-param=max-inline-insns-small-and-cold=
+Common Joined UInteger Var(param_max_inline_insns_small_and_cold) Optimization Init(0) Param
+The maximum number of instructions in a small and cold function eligible for inlining.
 
 -param=max-inline-recursive-depth=
 Common Joined UInteger Var(param_max_inline_recursive_depth) Optimization Init(8) Param
