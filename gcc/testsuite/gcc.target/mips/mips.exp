@@ -300,6 +300,7 @@ foreach option {
     relax-pic-calls
     mcount-ra-address
     odd-spreg
+    sched-weight
     msa
     loongson-mmi
     loongson-ext
