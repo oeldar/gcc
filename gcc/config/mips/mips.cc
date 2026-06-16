@@ -23302,6 +23302,15 @@ mips_c_mode_for_floating_type (enum tree_index ti)
   return default_mode_for_floating_type (ti);
 }
 
+/* Implement TARGET_SET_UP_BY_PROLOGUE.  */
+
+static void
+mips_set_up_by_prologue (hard_reg_set_container *regs)
+{
+  if (!TARGET_USE_GOT && TARGET_GPOPT)
+    CLEAR_HARD_REG_BIT (regs->set, GLOBAL_POINTER_REGNUM);
+}
+
 void
 mips_bit_clear_info (enum machine_mode mode, unsigned HOST_WIDE_INT m,
 		      int *start_pos, int *size)
@@ -23454,6 +23463,9 @@ mips_print_patchable_function_entry (FILE *file ATTRIBUTE_UNUSED,
 
 #undef TARGET_IN_SMALL_DATA_P
 #define TARGET_IN_SMALL_DATA_P mips_in_small_data_p
+
+#undef TARGET_SET_UP_BY_PROLOGUE
+#define TARGET_SET_UP_BY_PROLOGUE mips_set_up_by_prologue
 
 #undef TARGET_MACHINE_DEPENDENT_REORG
 #define TARGET_MACHINE_DEPENDENT_REORG mips_reorg
