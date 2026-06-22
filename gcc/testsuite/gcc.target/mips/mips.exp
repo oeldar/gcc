@@ -315,6 +315,8 @@ foreach option {
     code-readable
     nan
     r10k-cache-barrier
+    sdata-num
+    sdata-opt-list
     tune
 } {
     lappend mips_option_groups $option "-m$option=.*"
