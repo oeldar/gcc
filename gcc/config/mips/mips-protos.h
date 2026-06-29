@@ -398,4 +398,6 @@ extern void mips_bit_clear_info (enum machine_mode, unsigned HOST_WIDE_INT,
 
 extern const char *mips_output_compare (const char *fpcmp, const char *fcond,
 			const char *fmt, const char *fpcc_mode, bool swap);
+extern bool mips_expand_mod_pow2 (rtx, rtx, rtx);
+
 #endif /* ! GCC_MIPS_PROTOS_H */
