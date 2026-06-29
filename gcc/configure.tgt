@@ -18,3 +18,12 @@
 # autoconf generated configure script.  Putting it in a separate shell file
 # lets us skip running autoconf when modifying target specific information.
 
+# Select default multilib build variants
+if test x${with_multi_buildlist} = x ; then
+  case "$target" in
+    mips*-img-linux*) multi_buildlist=${srcdir}/gcc/config/mips/ml-img-linux ;;
+    mips*-mti-linux*) multi_buildlist=${srcdir}/gcc/config/mips/ml-mti-linux ;;
+    mips*-img-elf*) multi_buildlist=${srcdir}/gcc/config/mips/ml-img-elf ;;
+    mips*-mti-elf*) multi_buildlist=${srcdir}/gcc/config/mips/ml-mti-elf ;;
+  esac
+fi
