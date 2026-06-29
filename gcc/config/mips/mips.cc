@@ -5371,7 +5371,7 @@ mips_split_move_insn (rtx dest, rtx src, rtx insn)
    that SRC is operand 1 and DEST is operand 0.  */
 
 const char *
-mips_output_move (rtx dest, rtx src)
+mips_output_move (rtx insn, rtx dest, rtx src)
 {
   enum rtx_code dest_code = GET_CODE (dest);
   enum rtx_code src_code = GET_CODE (src);
@@ -5444,9 +5444,15 @@ mips_output_move (rtx dest, rtx src)
 	switch (GET_MODE_SIZE (mode))
 	  {
 	  case 1: return "sb\t%z1,%0";
-	  case 2: return "sh\t%z1,%0";
-	  case 4: return "sw\t%z1,%0";
-	  case 8: return "sd\t%z1,%0";
+	  case 2: return ((MEM_ALIGN (dest) >= BITS_PER_UNIT * 2)
+			  ? "sh\t%z1,%0"
+			  : "sh\t%z1,%0 # unaligned");
+	  case 4: return ((MEM_ALIGN (dest) >= BITS_PER_UNIT * 4)
+			  ? "sw\t%z1,%0"
+			  : "sw\t%z1,%0 # unaligned");
+	  case 8: return ((MEM_ALIGN (dest) >= BITS_PER_UNIT * 8)
+			  ? "sd\t%z1,%0"
+			  : "sd\t%z1,%0 # unaligned");
 	  default: gcc_unreachable ();
 	  }
     }
@@ -5491,14 +5497,41 @@ mips_output_move (rtx dest, rtx src)
 	}
 
       if (src_code == MEM)
-	switch (GET_MODE_SIZE (mode))
-	  {
-	  case 1: return "lbu\t%0,%1";
-	  case 2: return "lhu\t%0,%1";
-	  case 4: return "lw\t%0,%1";
-	  case 8: return "ld\t%0,%1";
-	  default: gcc_unreachable ();
-	  }
+	{
+	  if (TARGET_DEAD_LOADS
+	      && MEM_VOLATILE_P (src)
+	      && find_regno_note (insn, REG_UNUSED, REGNO (dest))
+	      && !TARGET_MIPS16)
+	    switch (GET_MODE_SIZE (mode))
+	      {
+	      case 1: return "lbu\t$0,%1";
+	      case 2: return ((MEM_ALIGN (src) >= BITS_PER_UNIT * 2)
+			      ? "lhu\t$0,%1"
+			      : "lhu\t$0,%1 # unaligned");
+	      case 4: return ((MEM_ALIGN (src) >= BITS_PER_UNIT * 4)
+			      ? "lw\t$0,%1"
+			      : "lw\t$0,%1 # unaligned");
+	      case 8: return ((MEM_ALIGN (src) >= BITS_PER_UNIT * 8)
+			      ? "ld\t$0,%1"
+			      : "ld\t$0,%1 # unaligned");
+	      default: gcc_unreachable ();
+	      }
+	  else
+	    switch (GET_MODE_SIZE (mode))
+	      {
+	      case 1: return "lbu\t%0,%1";
+	      case 2: return ((MEM_ALIGN (src) >= BITS_PER_UNIT * 2)
+			      ? "lhu\t%0,%1"
+			      : "lhu\t%0,%1 # unaligned");
+	      case 4: return ((MEM_ALIGN (src) >= BITS_PER_UNIT * 4)
+			      ? "lw\t%0,%1"
+			      : "lw\t%0,%1 # unaligned");
+	      case 8: return ((MEM_ALIGN (src) >= BITS_PER_UNIT * 8)
+			      ? "ld\t%0,%1"
+			      : "ld\t%0,%1 # unaligned");
+	      default: gcc_unreachable ();
+	      }
+	}
 
       if (src_code == CONST_INT)
 	{

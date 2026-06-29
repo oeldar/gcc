@@ -277,6 +277,7 @@ for { set option 0 } { $option < 32 } { incr option } {
 foreach option {
     abicalls
     branch-likely
+    dead-loads
     dsp
     dspr2
     explicit-relocs
