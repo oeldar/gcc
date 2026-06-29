@@ -313,6 +313,7 @@ foreach option {
     abs
     branch-cost
     code-readable
+    func-opt-list
     nan
     r10k-cache-barrier
     sdata-num
@@ -1042,23 +1043,25 @@ proc mips-dg-options { args } {
 	}
     }
 
-    # Pass an absolute file path to -munique-sections=.
-    set unq_sec_test_option_p [mips_test_option_p options unique-sections]
+    # Pass absolute file paths to options that name testsuite-local files.
+    foreach list_option {
+      func-opt-list
+      unique-sections
+    } {
+      if { [mips_test_option_p options $list_option] } {
+        set old_option [mips_option options $list_option]
+        if { ![regexp {=.*$} $old_option filename] } {
+          error "Unrecognized specification: $old_option"
+        }
+        set filename [string trimleft $filename "="]
 
-    if { $unq_sec_test_option_p } {
-	    set unq_sec [mips_option options unique-sections]
-	    if { ![regexp {=.*$} $unq_sec filename] } {
-		    error "Unrecognized specification: $unq_sec"
-	    }
-	    set filename [string trimleft $filename "="]
+        global srcdir
+        global subdir
+        set new_option "-m$list_option=$srcdir/$subdir/$filename"
 
-	    global srcdir
-	    global subdir
-	    set new_unq_sec "-munique-sections=$srcdir/$subdir/$filename"
-
-	    set options(option,[mips_option_group $new_unq_sec]) $new_unq_sec
+        set options(option,[mips_option_group $new_option]) $new_option
+      }
     }
-
 
     # Handle dependencies between the test options and the optimization ones.
     mips_option_dependency options "-fno-unroll-loops" "-fno-unroll-all-loops"
