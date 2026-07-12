@@ -312,6 +312,7 @@ foreach option {
 # Add -mfoo= options to mips_option_groups.
 foreach option {
     abs
+    blockmov-limit
     branch-cost
     code-readable
     func-opt-list

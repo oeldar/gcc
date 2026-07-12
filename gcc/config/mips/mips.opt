@@ -550,6 +550,9 @@ mfunc-opt-list=
 Target RejectNegative Joined Var(mips_func_opt_list_file) Init(0) Defer
 mfunc-opt-list=FILE	Use to specify per function optimizations.
 
+mblockmov-limit=
+Target RejectNegative Undocumented Joined UInteger Var(mips_movmem_limit) Init(-1)
+
 minline-intermix
 Target Var(TARGET_INLINE_INTERMIX)
 Allow inlining even if the compression flags differ between caller and callee.

@@ -1,7 +1,7 @@
 /* Check that typedef alignment does not affect passing of function
    parameters for O32 ABI.  */
 /* { dg-do compile { target { "mips*-*-*" } } } */
-/* { dg-options "-mabi=32"  } */
+/* { dg-options "-mabi=32 -mblockmov-limit=0"  } */
 /* { dg-skip-if "" { *-*-* } { "-flto" } { "" } } */
 
 typedef struct ui8
