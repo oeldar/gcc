@@ -2223,6 +2223,136 @@ noce_try_cmove (struct noce_if_info *if_info)
   return false;
 }
 
+/* If the target has a conditional move which accepts two registers, do not
+   try synthesized conditional XOR/IOR, as it will not yield any benefits.  */
+
+static bool
+noce_try_synthesized_xor_ok (struct noce_if_info *if_info)
+{
+  machine_mode mode = GET_MODE (if_info->x);
+  rtx testreg = gen_rtx_REG (mode, LAST_VIRTUAL_REGISTER + 1);
+
+  rtx if_then_else = gen_rtx_IF_THEN_ELSE (mode,
+					    if_info->cond,
+					    const0_rtx, if_info->x);
+
+  rtx if_then_else_2 = gen_rtx_IF_THEN_ELSE (mode,
+					      if_info->cond,
+					      testreg, if_info->x);
+
+  return rtx_cost (if_then_else_2, mode, SET, 1, true)
+	  > rtx_cost (if_then_else, mode, SET, 1, true);
+}
+
+/* Expand "if (test) x ^= C;" as
+
+   a = 0;
+   if (test) a = C;
+   x ^= a;
+
+   This lowers the number of necessary conditional moves on some targets.
+
+   We allow for maximum of three instructions in the then block.
+   First one loads the constant into a register.  Second one is an actual
+   XOR/IOR instruction.  Third one is a zero or sign extend.  */
+
+static bool
+noce_try_synthesized_xor (struct noce_if_info *if_info)
+{
+  enum rtx_code code = GET_CODE (if_info->cond);
+
+  if (code != NE && code != EQ)
+    return false;
+  if (if_info->else_bb)
+    return false;
+
+  rtx a = if_info->a;
+  rtx_insn *insn_a = if_info->insn_a;
+  rtx_insn *prev = prev_nonnote_nondebug_insn (insn_a);
+  if ((GET_CODE (a) == ZERO_EXTEND
+      || GET_CODE (a) == SIGN_EXTEND)
+      && prev
+      && single_set (prev))
+    {
+      insn_a = prev;
+      a = SET_SRC (single_set (insn_a));
+    }
+
+  enum rtx_code opcode = GET_CODE (a);
+  if (opcode != XOR && opcode != IOR)
+    return false;
+
+  rtx xor_src = XEXP (a, 0);
+  rtx xor_const = XEXP (a, 1);
+  if (GET_CODE (xor_src) == SUBREG)
+    xor_src = SUBREG_REG (xor_src);
+
+  prev = prev_nonnote_nondebug_insn (insn_a);
+  if (prev && BLOCK_FOR_INSN (insn_a) == BLOCK_FOR_INSN (prev))
+    {
+      if (!REG_P (xor_const))
+	      return false;
+
+      a = single_set (prev);
+      if (a != NULL_RTX
+	  && rtx_equal_p (SET_DEST (a), xor_const)
+	  && CONST_INT_P (SET_SRC (a)))
+	xor_const = SET_SRC (a);
+      else
+	return false;
+
+      rtx_insn *prev_prev = prev_nonnote_nondebug_insn  (prev);
+      if (prev_prev && BLOCK_FOR_INSN (prev) == BLOCK_FOR_INSN (prev_prev))
+	return false;
+    }
+  else if (!CONST_INT_P (xor_const))
+    return false;
+
+  if (!rtx_equal_p (xor_src, if_info->x))
+    return false;
+
+  start_sequence ();
+
+  machine_mode mode = GET_MODE (if_info->x);
+  rtx const_reg = gen_reg_rtx (mode);
+  rtx target = gen_reg_rtx (mode);
+
+  noce_emit_move_insn (const_reg, xor_const);
+  target = noce_emit_cmove (if_info, target, code,
+			     XEXP (if_info->cond, 0),
+			     XEXP (if_info->cond, 1),
+			     const_reg, const0_rtx);
+  if (!target)
+    {
+      end_sequence ();
+      return false;
+    }
+
+  target = expand_simple_binop (GET_MODE (if_info->x), opcode,
+				 if_info->x, target, if_info->x,
+				 0, OPTAB_WIDEN);
+  if (!target)
+    {
+      end_sequence ();
+      return false;
+    }
+
+  rtx_insn* seq = end_ifcvt_sequence (if_info);
+  if (!seq)
+    return false;
+
+  if (!targetm.noce_conversion_profitable_p (seq, if_info)
+      && (seq_cost (seq, if_info->speed_p)
+	> if_info->max_seq_cost + COSTS_N_INSNS (1)))
+    return false;
+
+  emit_insn_before_setloc (seq, if_info->jump,
+			    INSN_LOCATION (if_info->insn_a));
+  if_info->transform_name = "noce_try_synthesized_xor";
+
+  return true;
+}
+
 /* Return true if X contains a conditional code mode rtx.  */
 
 static bool
@@ -4557,6 +4687,10 @@ noce_process_if_block (struct noce_if_info *if_info)
     goto success;
   if (HAVE_conditional_move
       && noce_try_cmove (if_info))
+    goto success;
+  if (HAVE_conditional_move
+      && noce_try_synthesized_xor_ok (if_info)
+      && noce_try_synthesized_xor (if_info))
     goto success;
   if (! targetm.have_conditional_execution ())
     {
