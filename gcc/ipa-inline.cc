@@ -97,6 +97,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "rtl.h"
 #include "tree.h"
 #include "gimple.h"
+#include "gimple-iterator.h"
 #include "alloc-pool.h"
 #include "tree-pass.h"
 #include "gimple-ssa.h"
@@ -106,6 +107,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "calls.h"
 #include "tree-inline.h"
 #include "profile.h"
+#include "predict.h"
 #include "symbol-summary.h"
 #include "tree-vrp.h"
 #include "sreal.h"
@@ -777,6 +779,132 @@ num_calls (struct cgraph_node *n)
   return num;
 }
 
+static bool big_speedup_p (struct cgraph_edge*);
+
+/* Return true if E has precise evidence that its call is effectively never
+   executed. Keep this check local to the inliner: changing the cgraph
+   hotness predicate would also affect unrelated IPA transformations.  */
+
+static bool
+probably_never_executed_call_p (struct cgraph_edge *e)
+{
+  if (e->count.ipa () == profile_count::zero ())
+    return true;
+
+  if (!e->call_stmt)
+    return false;
+
+  basic_block bb = gimple_bb (e->call_stmt);
+  if (!bb)
+    return false;
+
+  cgraph_node *where = e->caller->inlined_to ? e->caller->inlined_to : e->caller;
+  struct function *fun = DECL_STRUCT_FUNCTION (where->decl);
+  if (!fun || !fun->cfg)
+    return false;
+
+  return probably_never_executed_bb_p (fun, bb);
+}
+
+/* Return true if E's call is in a simple tail position. The tail-call pass may
+   not have marked the call yet when IPA inlining runs, so also recognize the
+   common GIMPLE shape where the call is immediately followed by a return of
+   the call result.  */
+
+static bool
+tail_position_call_p (struct cgraph_edge *e)
+{
+  gcall *call = e->call_stmt;
+
+  if (!call)
+    return false;
+
+  if (gimple_call_tail_p (call) || gimple_call_must_tail_p (call))
+    return true;
+
+  if (!gimple_bb (call))
+    return false;
+
+  gimple_stmt_iterator gsi = gsi_for_stmt (call);
+  gsi_next_nondebug (&gsi);
+
+  if (gsi_end_p (gsi))
+    return false;
+
+  greturn *ret = dyn_cast <greturn *> (gsi_stmt (gsi));
+  if (!ret)
+    return false;
+
+  tree lhs = gimple_call_lhs (call);
+  tree retval = gimple_return_retval (ret);
+
+  if (!retval)
+    return lhs == NULL_TREE;
+
+  return lhs && retval == lhs;
+}
+
+/*  Return true if profile feedback shows that inlining E is profitable under
+    -Os. Unlike -O2, do not fall back to static frequency estimates. Also
+    require a significant estimated speedup, so profile hotness alone does not
+    turn size optimization into normal -O2-style inlining.  */
+
+static bool
+profitable_profiled_call_p (struct cgraph_edge *e, sreal scale)
+{
+  bool hot = false;
+
+  if (probably_never_executed_call_p (e))
+    return false;
+
+  profile_count c = e->count.ipa ();
+  if (c.reliable_p ()
+      || (c.quality () == AFDO && c.nonzero_p ()))
+    hot = maybe_hot_count_p (NULL, c * scale);
+
+  else if ((c.quality () == AFDO
+	    || e->count.quality () == GUESSED_GLOBAL0_ADJUSTED)
+	   && e->callee && e->callee->count.quality () == AFDO)
+    hot = maybe_hot_count_p (NULL, c.force_nonzero () * scale);
+
+  return hot && big_speedup_p (e);
+}
+
+/*  Return true if the inliner should treat E as hot. Keep the global cgraph
+    hotness predicate conservative for -Os, but allow the inliner to use
+    profile information for balanced size optimization.  */
+
+static bool
+inliner_maybe_hot_p (struct cgraph_edge *e, sreal scale)
+{
+  if (opt_for_fn (e->caller->decl, optimize_size) == OPTIMIZE_SIZE_BALANCED)
+    return profitable_profiled_call_p (e, scale);
+
+  return e->maybe_hot_p (scale);
+}
+
+/*  Return true if positive growth is allowed for E. Under -Os, only permit a
+    small, profile-proven profitable expansion. Do not spend that allowance on
+    a tail call, since the generic IPA cost model cannot account for the cheap
+    target-specific sibling-call sequence that inlining may replace.  */
+
+static bool
+allow_size_growth_p (struct cgraph_edge *e, sreal scale, int growth)
+{
+  if (opt_for_fn (e->caller->decl, optimize_size) != OPTIMIZE_SIZE_BALANCED)
+    return e->maybe_hot_p (scale);
+
+  if (tail_position_call_p (e))
+    return false;
+
+  /*  Reuse the existing automatic inlining limit rather than adding another
+      size parameter.  */
+  if (growth > inline_insns_auto (e->caller, false, false))
+    return false;
+
+  return profitable_profiled_call_p (e, scale);
+}
+
 
 /* Return true if we are interested in inlining small function.  */
 
@@ -819,7 +947,7 @@ want_early_inline_function_p (struct cgraph_edge *e)
 
       if (!want_inline || growth <= param_max_inline_insns_size)
 	;
-      else if (!e->maybe_hot_p ())
+      else if (!allow_size_growth_p (e, 1, growth))
 	{
 	  if (dump_enabled_p ())
 	    dump_printf_loc (MSG_MISSED_OPTIMIZATION, e->call_stmt,
@@ -1001,7 +1129,7 @@ want_inline_small_function_p (struct cgraph_edge *e, bool report)
      inline candidate.  */
   if ((!DECL_DECLARED_INLINE_P (callee->decl)
       && (!e->count.ipa ().initialized_p ()
-	  || !e->maybe_hot_p (callee_info->time)))
+	  || !inliner_maybe_hot_p (e, callee_info->time)))
       && callee_info->min_size - call_info->call_stmt_size
 	 > inline_insns_auto (e->caller, true, true))
     {
@@ -1081,7 +1209,7 @@ want_inline_small_function_p (struct cgraph_edge *e, bool report)
  	    }
 	}
       /* If call is cold, do not inline when function body would grow. */
-      else if (!e->maybe_hot_p (callee_speedup (e))
+      else if (!allow_size_growth_p (e, callee_speedup (e), growth)
 	       && (growth >= inline_insns_single (e->caller, false, false)
 		   || growth_positive_p (callee, e, growth)))
 	{
