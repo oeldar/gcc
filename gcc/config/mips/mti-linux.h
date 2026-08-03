@@ -21,7 +21,9 @@ along with GCC; see the file COPYING3.  If not see
    MIPS_SYSVERSION_SPEC defaults to 'r2' (mips32r2 or mips64r2) unless
    'r1' or 'r6' are specifically given so that mips32r3, mips32r5,
    mips64r3, and mips64r5 will all default to 'r2'.  See MULTILIB_MATCHES
-   definition in t-mti-linux.  */
+   definition in t-mips-multi.  */
+
+#undef MULTILIB_DEFAULTS
 
 #define MIPS_SYSVERSION_SPEC \
     "%{mips32|mips64:r1;mips32r6|mips64r6:r6;:r2}%{mips16:-mips16}"
