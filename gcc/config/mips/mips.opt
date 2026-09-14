@@ -512,3 +512,7 @@ Use Loongson EXTension (EXT) instructions.
 mloongson-ext2
 Target Var(TARGET_LOONGSON_EXT2)
 Use Loongson EXTension R2 (EXT2) instructions.
+
+msched-weight
+Target Var(TARGET_SCHED_WEIGHT)
+Use a P5600 dependency-graph tie-breaker with weighted -fsched-pressure.

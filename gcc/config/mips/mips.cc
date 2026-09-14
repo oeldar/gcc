@@ -39,6 +39,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "attribs.h"
 #include "optabs.h"
 #include "regs.h"
+#include "ira.h"
 #include "emit-rtl.h"
 #include "recog.h"
 #include "cgraph.h"
@@ -70,6 +71,16 @@ along with GCC; see the file COPYING3.  If not see
 
 /* This file should be included last.  */
 #include "target-def.h"
+
+static int *level = NULL;
+static unsigned long mips_pressure_tiebreak_calls;
+static unsigned long mips_pressure_tiebreak_candidates;
+static unsigned long mips_pressure_tiebreak_pressure_wins;
+static unsigned long mips_pressure_tiebreak_level_wins;
+static unsigned long mips_pressure_tiebreak_swaps;
+
+#define LEVEL(INSN)	\
+  level[INSN_UID ((INSN))]
 
 /* True if X is an UNSPEC wrapper around a SYMBOL_REF or LABEL_REF.  */
 #define UNSPEC_ADDRESS_P(X)					\
@@ -15561,6 +15572,219 @@ mips_74k_agen_reorder (rtx_insn **ready, int nready)
     }
 }
 
+
+static bool
+mips_pressure_tiebreak_active_p ()
+{
+  return (!reload_completed
+	  && TUNE_P5600
+	  && TARGET_SCHED_WEIGHT
+	  && sched_pressure == SCHED_PRESSURE_WEIGHTED
+	  && !sched_fusion
+	  && param_sched_autopref_queue_depth < 0);
+}
+
+static void
+mips_pressure_tiebreak_init_global (int old_max_uid)
+{
+  level = (int *) xcalloc (old_max_uid, sizeof (int));
+  mips_pressure_tiebreak_calls = 0;
+  mips_pressure_tiebreak_candidates = 0;
+  mips_pressure_tiebreak_pressure_wins = 0;
+  mips_pressure_tiebreak_level_wins = 0;
+  mips_pressure_tiebreak_swaps = 0;
+}
+
+static void
+mips_sched_init_global (FILE *dump ATTRIBUTE_UNUSED,
+			int verbose ATTRIBUTE_UNUSED,
+			int old_max_uid)
+{
+  if (mips_pressure_tiebreak_active_p ())
+    mips_pressure_tiebreak_init_global (old_max_uid);
+}
+
+static void
+mips_pressure_tiebreak_evaluation (rtx_insn *head, rtx_insn *tail)
+{
+  sd_iterator_def sd_it;
+  dep_t dep;
+  rtx_insn *prev_head, *insn;
+  rtx x;
+  prev_head = PREV_INSN (head);
+
+  for (insn = tail; insn != prev_head; insn = PREV_INSN (insn))
+    if (INSN_P (insn))
+      {
+	FOR_EACH_DEP (insn, SD_LIST_FORW, sd_it, dep)
+	  {
+	     x = DEP_CON (dep);
+	     if (!DEBUG_INSN_P (x))
+	       {
+		  if (LEVEL (x) > LEVEL (insn))
+		    LEVEL (insn) = LEVEL (x);
+	       }
+	  }
+	LEVEL (insn)++;
+      }
+}
+
+static void
+mips_evaluation_hook (rtx_insn *head, rtx_insn *tail)
+{
+  if (mips_pressure_tiebreak_active_p ())
+    mips_pressure_tiebreak_evaluation (head, tail);
+}
+
+static void
+mips_pressure_tiebreak_finish_global ()
+{
+  if (level != NULL)
+    {
+      free (level);
+      level = NULL;
+    }
+}
+
+static void
+mips_sched_finish_global (FILE *dump ATTRIBUTE_UNUSED,
+			  int verbose ATTRIBUTE_UNUSED)
+{
+  if (level != NULL)
+    {
+      if (dump && verbose >= 1)
+	fprintf (dump,
+		 ";; P5600 pressure tie-break: calls=%lu candidates=%lu "
+		 "pressure=%lu level=%lu swaps=%lu\n",
+		 mips_pressure_tiebreak_calls,
+		 mips_pressure_tiebreak_candidates,
+		 mips_pressure_tiebreak_pressure_wins,
+		 mips_pressure_tiebreak_level_wins,
+		 mips_pressure_tiebreak_swaps);
+		   mips_pressure_tiebreak_finish_global ();
+    }
+}
+
+static int
+mips_pressure_delay (rtx_insn *insn, int cycle)
+{
+  return MAX (HID (insn)->tick - cycle, 0);
+}
+
+static int
+mips_reg_pressure_change (rtx_insn *insn)
+{
+  reg_pressure_data *pressure = INSN_REG_PRESSURE (insn);
+  int change = 0;
+
+  for (int i = 0; i < ira_pressure_classes_num; ++i)
+    change += pressure[i].change;
+  return change;
+}
+
+static bool
+mips_pressure_tie_p (rtx_insn *a, rtx_insn *b, int cycle)
+{
+  if (DEBUG_INSN_P (a) || DEBUG_INSN_P (b)
+      || INSN_REG_PRESSURE (a) == NULL
+      || INSN_REG_PRESSURE (b) == NULL)
+    return false;
+
+  if (flag_sched_group_heuristic && SCHED_GROUP_P (a) != SCHED_GROUP_P (b))
+    return false;
+
+  if (mips_pressure_delay (a, cycle) != mips_pressure_delay (b, cycle)
+      || INSN_REG_PRESSURE_EXCESS_COST_CHANGE (a)
+    != INSN_REG_PRESSURE_EXCESS_COST_CHANGE (b)
+      || INSN_PRIORITY (a) != INSN_PRIORITY (b)
+      || HID (a)->cost != HID (b)->cost
+      || get_attr_type (a) == TYPE_STORE)
+    return false;
+
+  if ((HID (a)->tick > cycle || HID (b)->tick > cycle)
+      && HID (a)->tick != HID (b)->tick)
+    return false;
+
+  if ((current_sched_info->flags & DO_BACKTRACKING)
+      && HID (a)->feeds_backtrack_insn != HID (b)->feeds_backtrack_insn)
+    return false;
+
+  if (flag_sched_spec_insn_heuristic && spec_info)
+    {
+      ds_t spec_a = TODO_SPEC (a) & SPECULATIVE;
+      ds_t spec_b = TODO_SPEC (b) & SPECULATIVE;
+      dw_t weak_a = spec_a ? ds_weak (spec_a) : NO_DEP_WEAK;
+      dw_t weak_b = spec_b ? ds_weak (spec_b) : NO_DEP_WEAK;
+      int weak_diff = weak_b - weak_a;
+      if (weak_diff > (NO_DEP_WEAK / 8)
+          || weak_diff < -(NO_DEP_WEAK / 8))
+	return false; 
+    }
+
+  if (flag_sched_rank_heuristic
+      && current_sched_info->rank (a, b) != 0)
+      return false;
+
+  if (flag_sched_dep_count_heuristic
+      && dep_list_size (a, SD_LIST_FORW) != dep_list_size (b, SD_LIST_FORW))
+      return false;
+
+  return true;
+}
+
+static void
+mips_sched_pressure_tiebreak (rtx_insn **ready, int nready, int cycle)
+{
+  int toswap = nready - 1;
+
+  mips_pressure_tiebreak_calls++;
+
+  for (int i = nready - 2; i >= 0; --i)
+    {
+      rtx_insn *insn = ready[i];
+      rtx_insn *best = ready[toswap];
+
+      if (!mips_pressure_tie_p (insn, best, cycle))
+        continue;
+
+      mips_pressure_tiebreak_candidates++;
+
+      int change = mips_reg_pressure_change (insn);
+      int best_change = mips_reg_pressure_change (best);
+      if (change < best_change)
+        {
+	  toswap = i;
+	  mips_pressure_tiebreak_pressure_wins++;
+	}
+      else if (change == best_change && LEVEL (insn) > LEVEL (best))
+        {
+	  toswap = i;
+	  mips_pressure_tiebreak_level_wins++;
+	}
+    }
+
+    if (toswap != nready - 1)
+      {
+        rtx_insn *temp = ready[nready - 1];
+
+	if (sched_dump && sched_verbose >= 1)
+	  fprintf (sched_dump,
+		   ";; P5600 pressure tie-break swap: %d(L%d) over "
+		   "%d(L%d), excess=%d change=%d/%d types=%d/%d\n",
+		   INSN_UID (ready[toswap]), LEVEL (ready[toswap]),
+		   INSN_UID (ready[nready - 1]), LEVEL (ready[nready - 1]),
+		   INSN_REG_PRESSURE_EXCESS_COST_CHANGE (ready[toswap]),
+		   mips_reg_pressure_change (ready[toswap]),
+		   mips_reg_pressure_change (ready[nready - 1]),
+		   (int) get_attr_type (ready[toswap]),
+		   (int) get_attr_type (ready[nready - 1]));
+	  ready[nready - 1] = ready[toswap];
+	  ready[toswap] = temp;
+	  mips_pressure_tiebreak_swaps++;
+      }
+}
+
+
 /* Implement TARGET_SCHED_INIT.  */
 
 static void
@@ -15582,7 +15806,7 @@ mips_sched_init (FILE *file ATTRIBUTE_UNUSED, int verbose ATTRIBUTE_UNUSED,
 
 static void
 mips_sched_reorder_1 (FILE *file ATTRIBUTE_UNUSED, int verbose ATTRIBUTE_UNUSED,
-		      rtx_insn **ready, int *nreadyp, int cycle ATTRIBUTE_UNUSED)
+		      rtx_insn **ready, int *nreadyp, int cycle)
 {
   if (!reload_completed
       && TUNE_MACC_CHAINS
@@ -15597,6 +15821,10 @@ mips_sched_reorder_1 (FILE *file ATTRIBUTE_UNUSED, int verbose ATTRIBUTE_UNUSED,
 
   if (TUNE_74K)
     mips_74k_agen_reorder (ready, *nreadyp);
+
+  if (mips_pressure_tiebreak_active_p ()
+      && *nreadyp > 1)
+    mips_sched_pressure_tiebreak (ready, *nreadyp, cycle);
 }
 
 /* Implement TARGET_SCHED_REORDER.  */
@@ -23687,6 +23915,15 @@ mips_print_patchable_function_entry (FILE *file ATTRIBUTE_UNUSED,
 
 #undef TARGET_C_MODE_FOR_FLOATING_TYPE
 #define TARGET_C_MODE_FOR_FLOATING_TYPE mips_c_mode_for_floating_type
+
+#undef TARGET_SCHED_INIT_GLOBAL
+#define TARGET_SCHED_INIT_GLOBAL mips_sched_init_global
+
+#undef TARGET_SCHED_FINISH_GLOBAL
+#define TARGET_SCHED_FINISH_GLOBAL mips_sched_finish_global
+
+#undef TARGET_SCHED_DEPENDENCIES_EVALUATION_HOOK
+#define TARGET_SCHED_DEPENDENCIES_EVALUATION_HOOK mips_evaluation_hook
 
 #undef TARGET_DOCUMENTATION_NAME
 #define TARGET_DOCUMENTATION_NAME "MIPS"
