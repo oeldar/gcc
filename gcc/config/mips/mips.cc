@@ -8254,12 +8254,36 @@ mips16_build_call_stub (rtx retval, rtx *fn_ptr, rtx args_size, int fp_code)
 
    Return the call itself.  */
 
+static bool mips_call_may_need_jalx_p (tree);
+
+static bool
+mips_r6_call_must_be_indirect_p (enum mips_call_type type, rtx addr)
+{
+  tree decl;
+
+  if (type != MIPS_CALL_NORMAL
+      || mips_isa_rev < 6
+      || TARGET_USE_GOT
+      || GET_CODE (addr) != SYMBOL_REF)
+    return false;
+
+  decl = SYMBOL_REF_DECL (addr);
+  if (!decl || TREE_CODE (decl) != FUNCTION_DECL)
+    return true;
+
+  if (mips_call_may_need_jalx_p (decl))
+    return true;
+
+  return DECL_EXTERNAL (decl) || !targetm.binds_local_p (decl);
+}
+
 rtx_insn *
 mips_expand_call (enum mips_call_type type, rtx result, rtx addr,
 		  rtx args_size, rtx aux, bool lazy_p)
 {
   rtx orig_addr, pattern;
   rtx_insn *insn;
+  bool r6_indirect_call_p;
   int fp_code;
 
   fp_code = aux == 0 ? 0 : (int) GET_MODE (aux);
@@ -8271,10 +8295,13 @@ mips_expand_call (enum mips_call_type type, rtx result, rtx addr,
     }
 
   orig_addr = addr;
-  if (!call_insn_operand (addr, VOIDmode))
+  r6_indirect_call_p = mips_r6_call_must_be_indirect_p (type, addr);
+  if (!call_insn_operand (addr, VOIDmode) || r6_indirect_call_p)
     {
       if (type == MIPS_CALL_EPILOGUE)
 	addr = MIPS_EPILOGUE_TEMP (Pmode);
+      else if (r6_indirect_call_p)
+        addr = gen_rtx_REG (Pmode, PIC_FUNCTION_ADDR_REGNUM);
       else
 	addr = gen_reg_rtx (Pmode);
       lazy_p |= mips_load_call_address (type, addr, orig_addr);
@@ -8385,7 +8412,8 @@ mips_function_ok_for_sibcall (tree decl, tree exp ATTRIBUTE_UNUSED)
      There is no JX counterpart of JALX.  */
   if (decl
       && const_call_insn_operand (XEXP (DECL_RTL (decl), 0), VOIDmode)
-      && mips_call_may_need_jalx_p (decl))
+      && (mips_call_may_need_jalx_p (decl)
+      || mips_r6_call_must_be_indirect_p (MIPS_CALL_NORMAL, XEXP (DECL_RTL (decl), 0))))
     return false;
 
   /* Sibling calls should not prevent lazy binding.  Lazy-binding stubs
