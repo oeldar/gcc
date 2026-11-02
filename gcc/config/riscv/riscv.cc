@@ -6750,6 +6750,20 @@ riscv_expand_conditional_move (rtx dest, rtx op, rtx cons, rtx alt)
   return false;
 }
 
+/* Implement TARGET_FUNCTION_ARG_PADDING.  The default implementation for
+   big-endian targets requires the mode size to be a compile-time constant.
+   Scalable RVV modes do not have such a size, so place their useful data at
+   the beginning of the argument slot.  */
+
+static pad_direction
+riscv_function_arg_padding (machine_mode mode, const_tree type)
+{
+  if (!GET_MODE_SIZE (mode).is_constant ())
+    return PAD_UPWARD;
+
+  return default_function_arg_padding (mode, type);
+}
+
 /* Implement TARGET_FUNCTION_ARG_BOUNDARY.  Every parameter gets at
    least PARM_BOUNDARY bits of alignment, but will be given anything up
    to PREFERRED_STACK_BOUNDARY bits if the type requires it.  */
@@ -12489,10 +12503,6 @@ riscv_override_options_internal (struct gcc_options *opts)
     sorry ("Current RISC-V GCC does not support VLEN greater than 4096bit for "
 	   "'V' Extension");
 
-  /* FIXME: We don't support RVV in big-endian for now, we may enable RVV with
-     big-endian after finishing full coverage testing.  */
-  if (TARGET_VECTOR && TARGET_BIG_ENDIAN)
-    sorry ("Current RISC-V GCC does not support RVV in big-endian mode");
 
   /* Convert -march and -mrvv-vector-bits to a chunks count.  */
   riscv_vector_chunks = riscv_convert_vector_chunks (opts);
@@ -17118,6 +17128,8 @@ riscv_memtag_tag_bitsize ()
 #define TARGET_FUNCTION_ARG_ADVANCE riscv_function_arg_advance
 #undef TARGET_FUNCTION_ARG_BOUNDARY
 #define TARGET_FUNCTION_ARG_BOUNDARY riscv_function_arg_boundary
+#undef TARGET_FUNCTION_ARG_PADDING
+#define TARGET_FUNCTION_ARG_PADDING riscv_function_arg_padding
 #undef TARGET_FNTYPE_ABI
 #define TARGET_FNTYPE_ABI riscv_fntype_abi
 
