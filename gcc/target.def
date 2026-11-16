@@ -5331,6 +5331,31 @@ register to be used by the caller for this argument; likewise\n\
  int, (cumulative_args_t cum, const function_arg_info &arg),
  hook_int_CUMULATIVE_ARGS_arg_info_0)
 
+/* Return true if the bytes that TARGET_ARG_PARTIAL_BYTES says are passed
+   in registers are the last bytes of the argument rather than the first.  */
+DEFHOOK
+(arg_partial_bytes_at_end_p,
+ "This target hook should return @code{true} if, for an argument @var{arg}\n\
+that is passed partially in registers and partially on the stack, the\n\
+registers hold the @emph{last} @code{TARGET_ARG_PARTIAL_BYTES} bytes of\n\
+the argument's in-memory representation instead of the first ones.  The\n\
+leading bytes of the argument are then passed at the start of its stack\n\
+slot.  This is the case, for example, on big-endian targets whose ABI\n\
+passes the least significant part of a split scalar in the last argument\n\
+register and the most significant part on the stack.\n\
+\n\
+The hook is only called for arguments for which\n\
+@code{TARGET_ARG_PARTIAL_BYTES} returns a nonzero value.  If it returns\n\
+@code{true}, @code{TARGET_FUNCTION_ARG} and\n\
+@code{TARGET_FUNCTION_INCOMING_ARG} must return a @code{parallel} for the\n\
+argument, whose offsets give the position of each register within the\n\
+argument.  The total argument size, the register part and the stack part\n\
+must each be a whole number of words.\n\
+\n\
+The default version of this hook returns @code{false}.",
+ bool, (cumulative_args_t cum, const function_arg_info &arg),
+ hook_bool_CUMULATIVE_ARGS_arg_info_false)
+
 /* Update the state in CA to advance past an argument in the
    argument list.  The values MODE, TYPE, and NAMED describe that
    argument.  */

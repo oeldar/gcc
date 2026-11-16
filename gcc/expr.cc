@@ -5288,10 +5288,14 @@ memory_load_overlap (rtx x, rtx y, HOST_WIDE_INT size)
    If PARTIAL and REG are both nonzero, then copy that many of the first
    bytes of X into registers starting with REG, and push the rest of X.
    The amount of space pushed is decreased by PARTIAL bytes.
-   REG must be a hard register in this case.
    If REG is zero but PARTIAL is not, take any all others actions for an
    argument partially in registers, but do not actually load any
    registers.
+
+   If PARTIAL_AT_END is true, the registers instead hold the last PARTIAL
+   bytes of X (see TARGET_ARG_PARTIAL_BYTES_AT_END_P) and the leading bytes
+   of X are pushed to the start of the stack slot.  REG, when nonzero, must
+   then be a PARALLEL.
 
    EXTRA is the amount in bytes of extra space to leave next to this arg.
    This is ignored if an argument block has already been allocated.
@@ -5311,7 +5315,7 @@ bool
 emit_push_insn (rtx x, machine_mode mode, tree type, rtx size,
 		unsigned int align, int partial, rtx reg, poly_int64 extra,
 		rtx args_addr, rtx args_so_far, int reg_parm_stack_space,
-		rtx alignment_pad, bool sibcall_p)
+		rtx alignment_pad, bool sibcall_p, bool partial_at_end)
 {
   rtx xinner;
   pad_direction stack_direction
@@ -5587,15 +5591,29 @@ emit_push_insn (rtx x, machine_mode mode, tree type, rtx size,
       /* We can do it by words, because any scalar bigger than a word
 	 has a size a multiple of a word.  */
       tree word_mode_type = lang_hooks.types.type_for_mode (word_mode, 1);
-      for (i = num_words - 1; i >= not_stack; i--)
-	if (i >= not_stack + offset)
-	  if (!emit_push_insn (operand_subword_force (x, i, mode),
-			  word_mode, word_mode_type, NULL_RTX, align, 0,
-			  NULL_RTX, 0, args_addr,
-			  GEN_INT (args_offset + ((i - not_stack + skip)
-						  * UNITS_PER_WORD)),
-			  reg_parm_stack_space, alignment_pad, sibcall_p))
-	    return false;
+      if (partial_at_end)
+	{
+	  /* The registers hold the last PARTIAL bytes of X, so the leading
+	     words of X go to the start of the stack slot.  */
+	  for (i = num_words - partial / UNITS_PER_WORD - 1; i >= 0; i--)
+	    if (!emit_push_insn (operand_subword_force (x, i, mode),
+				 word_mode, word_mode_type, NULL_RTX, align, 0,
+				 NULL_RTX, 0, args_addr,
+				 GEN_INT (args_offset + i * UNITS_PER_WORD),
+				 reg_parm_stack_space, alignment_pad,
+				 sibcall_p))
+	      return false;
+	}
+      else
+	for (i = num_words - 1; i >= not_stack; i--)
+	  if (i >= not_stack + offset)
+	    if (!emit_push_insn (operand_subword_force (x, i, mode),
+				 word_mode, word_mode_type, NULL_RTX, align, 0,
+				 NULL_RTX, 0, args_addr,
+				 GEN_INT (args_offset + ((i - not_stack + skip)
+							 * UNITS_PER_WORD)),
+				 reg_parm_stack_space, alignment_pad, sibcall_p))
+	      return false;
     }
   else
     {

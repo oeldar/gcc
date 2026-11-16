@@ -95,6 +95,9 @@ struct arg_data
   /* Number of bytes to put in registers.  0 means put the whole arg
      in registers.  Also 0 if not passed in registers.  */
   int partial;
+  /* True if the PARTIAL bytes in registers are the last bytes of the
+     argument rather than the first; see TARGET_ARG_PARTIAL_BYTES_AT_END_P.  */
+  bool partial_at_end;
   /* True if argument must be passed on stack.
      Note that some arguments may be passed on the stack
      even though pass_on_stack is false, just because FUNCTION_ARG says so.
@@ -1566,7 +1569,15 @@ initialize_argument_information (int num_actuals ATTRIBUTE_UNUSED,
 	args[i].tail_call_reg = args[i].reg;
 
       if (args[i].reg)
-	args[i].partial = targetm.calls.arg_partial_bytes (args_so_far, arg);
+	{
+	  args[i].partial = targetm.calls.arg_partial_bytes (args_so_far, arg);
+	  args[i].partial_at_end
+	    = (args[i].partial != 0
+	       && targetm.calls.arg_partial_bytes_at_end_p (args_so_far, arg));
+	  gcc_assert (!args[i].partial_at_end
+		      || (GET_CODE (args[i].reg) == PARALLEL
+			  && GET_CODE (args[i].tail_call_reg) == PARALLEL));
+	}
 
       args[i].pass_on_stack = targetm.calls.must_pass_in_stack (arg);
 
@@ -4222,6 +4233,7 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
     machine_mode mode;
     rtx reg;
     int partial;
+    bool partial_at_end;
     struct locate_and_pad_arg_data locate;
     rtx save_area;
   };
@@ -4451,6 +4463,12 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
       argvec[count].partial
 	= targetm.calls.arg_partial_bytes (args_so_far, arg);
 
+      argvec[count].partial_at_end
+	= (argvec[count].partial != 0
+	   && targetm.calls.arg_partial_bytes_at_end_p (args_so_far, arg));
+      gcc_assert (!argvec[count].partial_at_end
+		  || GET_CODE (argvec[count].reg) == PARALLEL);
+
       if (argvec[count].reg == 0
 	  || argvec[count].partial != 0
 	  || reg_parm_stack_space > 0)
@@ -4676,7 +4694,8 @@ emit_library_call_value_1 (int retval, rtx orgfun, rtx value,
 			  (gen_int_mode
 			   (argvec[argnum].locate.offset.constant, Pmode)),
 			  reg_parm_stack_space,
-			  ARGS_SIZE_RTX (argvec[argnum].locate.alignment_pad), false);
+			  ARGS_SIZE_RTX (argvec[argnum].locate.alignment_pad),
+			  false, argvec[argnum].partial_at_end);
 
 	  /* Now mark the segment we just used.  */
 	  if (ACCUMULATE_OUTGOING_ARGS)
@@ -5197,7 +5216,8 @@ store_one_arg (struct arg_data *arg, rtx argblock, int flags,
 			      NULL_RTX, parm_align, partial, reg, used - size,
 			      argblock, ARGS_SIZE_RTX (arg->locate.offset),
 			      reg_parm_stack_space,
-			      ARGS_SIZE_RTX (arg->locate.alignment_pad), true))
+			      ARGS_SIZE_RTX (arg->locate.alignment_pad), true,
+			      partial != 0 && arg->partial_at_end))
 	sibcall_failure = true;
 
       /* Unless this is a partially-in-register argument, the argument is now
@@ -5304,7 +5324,8 @@ store_one_arg (struct arg_data *arg, rtx argblock, int flags,
 			parm_align, partial, reg, excess, argblock,
 			ARGS_SIZE_RTX (arg->locate.offset),
 			reg_parm_stack_space,
-			ARGS_SIZE_RTX (arg->locate.alignment_pad), false);
+			ARGS_SIZE_RTX (arg->locate.alignment_pad), false,
+			partial != 0 && arg->partial_at_end);
       /* If we bypass emit_push_insn because it is a zero sized argument,
 	 we still might need to adjust stack if such argument requires
 	 extra alignment.  See PR104558.  */
@@ -5325,7 +5346,11 @@ store_one_arg (struct arg_data *arg, rtx argblock, int flags,
 	arg->value = arg->stack_slot;
     }
 
-  if (arg->reg && GET_CODE (arg->reg) == PARALLEL)
+  /* For register-suffix arguments, preserve the value saved before the
+     stack part was written.  Recomputing it could reread a volatile source
+     or an incoming argument area that the stack copy has overwritten.  */
+  if (arg->reg && GET_CODE (arg->reg) == PARALLEL
+      && (!arg->partial_at_end || !arg->parallel_value))
     {
       tree type = TREE_TYPE (arg->tree_value);
       arg->parallel_value
