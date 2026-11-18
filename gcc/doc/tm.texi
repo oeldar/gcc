@@ -4381,6 +4381,27 @@ register to be used by the caller for this argument; likewise
 @code{TARGET_FUNCTION_INCOMING_ARG}, for the called function.
 @end deftypefn
 
+@deftypefn {Target Hook} bool TARGET_ARG_PARTIAL_BYTES_AT_END_P (cumulative_args_t @var{cum}, const function_arg_info @var{&arg})
+This target hook should return @code{true} if, for an argument @var{arg}
+that is passed partially in registers and partially on the stack, the
+registers hold the @emph{last} @code{TARGET_ARG_PARTIAL_BYTES} bytes of
+the argument's in-memory representation instead of the first ones.  The
+leading bytes of the argument are then passed at the start of its stack
+slot.  This is the case, for example, on big-endian targets whose ABI
+passes the least significant part of a split scalar in the last argument
+register and the most significant part on the stack.
+
+The hook is only called for arguments for which
+@code{TARGET_ARG_PARTIAL_BYTES} returns a nonzero value.  If it returns
+@code{true}, @code{TARGET_FUNCTION_ARG} and
+@code{TARGET_FUNCTION_INCOMING_ARG} must return a @code{parallel} for the
+argument, whose offsets give the position of each register within the
+argument.  The total argument size, the register part and the stack part
+must each be a whole number of words.
+
+The default version of this hook returns @code{false}.
+@end deftypefn
+
 @deftypefn {Target Hook} bool TARGET_PASS_BY_REFERENCE (cumulative_args_t @var{cum}, const function_arg_info @var{&arg})
 This target hook should return @code{true} if argument @var{arg} at the
 position indicated by @var{cum} should be passed by reference.  This

@@ -2379,6 +2379,9 @@ struct assign_parm_data_one
   machine_mode passed_mode;
   struct locate_and_pad_arg_data locate;
   int partial;
+  /* True if the PARTIAL bytes in registers are the last bytes of the
+     argument rather than the first; see TARGET_ARG_PARTIAL_BYTES_AT_END_P.  */
+  bool partial_at_end;
 };
 
 /* A subroutine of assign_parms.  Initialize ALL.  */
@@ -2652,10 +2655,23 @@ assign_parm_find_entry_rtl (struct assign_parm_data_all *all,
 
       partial = targetm.calls.arg_partial_bytes (all->args_so_far, data->arg);
       data->partial = partial;
+      data->partial_at_end
+	= (partial != 0
+	   && targetm.calls.arg_partial_bytes_at_end_p (all->args_so_far,
+							data->arg));
+
+      gcc_assert (!data->partial_at_end
+		  || (GET_CODE (entry_parm) == PARALLEL
+		      && partial % UNITS_PER_WORD == 0));
 
       /* The caller might already have allocated stack space for the
-	 register parameters.  */
-      if (partial != 0 && all->reg_parm_stack_space == 0)
+	 register parameters.  If the registers hold the end of the
+	 argument, there is no room for them below the stack part, so
+	 assign_parm_adjust_entry_rtl reassembles the argument elsewhere
+	 instead.  */
+      if (partial != 0
+	  && all->reg_parm_stack_space == 0
+	  && !data->partial_at_end)
 	{
 	  /* Part of this argument is passed in registers and part
 	     is passed on the stack.  Ask the prologue code to extend
@@ -2815,7 +2831,7 @@ assign_parm_find_stack_rtl (tree parm, struct assign_parm_data_one *data)
      below the aligned stack slot.  The full value therefore starts at an
      address that is only aligned to the largest power of two dividing the
      size of the register part, not to FUNCTION_ARG_BOUNDARY.  */
-  if (data->partial)
+  if (data->partial && !data->partial_at_end)
     align = MIN (align,
 		 least_bit_hwi (data->partial) * BITS_PER_UNIT);
 
@@ -2841,7 +2857,36 @@ assign_parm_adjust_entry_rtl (struct assign_parm_data_one *data)
      In the special case of a DImode or DFmode that is split, we could put
      it together in a pseudoreg directly, but for now that's not worth
      bothering with.  */
-  if (data->partial != 0)
+  if (data->partial != 0 && data->partial_at_end)
+    {
+      /* The leading bytes of the argument were passed at the start of
+	 STACK_PARM and the last DATA->PARTIAL bytes in the registers
+	 described by ENTRY_PARM.  There is no room for the register part
+	 after the stack part, so reassemble the whole argument in a new
+	 stack slot and pretend that it arrived there.  */
+      HOST_WIDE_INT size = int_size_in_bytes (data->arg.type);
+      HOST_WIDE_INT stack_size = size - data->partial;
+      gcc_assert (stack_size > 0 && stack_size % UNITS_PER_WORD == 0);
+
+      rtx mem = assign_stack_local (data->arg.mode, size,
+				    TYPE_ALIGN (data->arg.type));
+      unsigned int align = MEM_ALIGN (mem);
+      MEM_COPY_ATTRIBUTES (mem, stack_parm);
+      set_mem_align (mem, align);
+
+      for (HOST_WIDE_INT offset = 0; offset < stack_size;
+	   offset += UNITS_PER_WORD)
+	{
+	  rtx word = adjust_address (copy_rtx (stack_parm), word_mode, offset);
+	  emit_move_insn (adjust_address (copy_rtx (mem), word_mode, offset),
+			  force_reg (word_mode, word));
+	}
+      emit_group_store (copy_rtx (mem), entry_parm, data->arg.type, size);
+
+      entry_parm = stack_parm = mem;
+      data->stack_parm = stack_parm;
+    }
+  else if (data->partial != 0)
     {
       /* Handle calls that pass values in multiple non-contiguous
 	 locations.  The Irix 6 ABI has examples of this.  */
