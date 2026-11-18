@@ -7288,6 +7288,43 @@ riscv_pass_2xlen_scalar_gpr_pair (machine_mode mode, unsigned regno)
 				   GEN_INT (high_offset))));
 }
 
+/* Return true if an argument described by MODE, TYPE and NAMED, for which
+   INFO has been computed, is a big-endian 2 * XLEN scalar that is split
+   between the last argument GPR and the stack.  The psABI passes the
+   low-order XLEN bits of such a value in the GPR and the high-order XLEN
+   bits on the stack.  In memory order, this means that the GPR holds the
+   last word of the value rather than the first on big-endian.  */
+
+static bool
+riscv_2xlen_scalar_split_at_end_p (const struct riscv_arg_info *info,
+				   machine_mode mode, const_tree type,
+				   bool named)
+{
+  return (BYTES_BIG_ENDIAN
+	  && named
+	  && info->stack_p
+	  && info->num_gprs == 1
+	  && riscv_2xlen_significance_scalar_p (mode, type));
+}
+
+/* Pass the low-order XLEN bits of a big-endian 2 * XLEN scalar in REGNO,
+   the last available argument GPR.  The high-order XLEN bits are passed on
+   the stack; see TARGET_ARG_PARTIAL_BYTES_AT_END_P.  */
+
+static rtx
+riscv_pass_2xlen_scalar_gpr_stack (machine_mode mode, unsigned regno)
+{
+  gcc_assert (BYTES_BIG_ENDIAN);
+  gcc_assert (regno == GP_ARG_LAST);
+
+  return gen_rtx_PARALLEL
+    (mode,
+     gen_rtvec (1,
+		gen_rtx_EXPR_LIST (VOIDmode,
+				   gen_rtx_REG (word_mode, regno),
+				   GEN_INT (UNITS_PER_WORD))));
+}
+
 /* Return true if VLS mode MODE fits in general purpose registers per the
    psABI.  The psABI allows aggregates up to 2 * XLEN bits to be passed in
    GPRs.  */
@@ -7810,6 +7847,10 @@ riscv_get_arg_info (struct riscv_arg_info *info, const CUMULATIVE_ARGS *cum,
 	return riscv_pass_2xlen_scalar_gpr_pair (mode,
 						 gpr_base + info->gpr_offset);
 
+      if (riscv_2xlen_scalar_split_at_end_p (info, mode, type, named))
+	return riscv_pass_2xlen_scalar_gpr_stack (mode,
+						  gpr_base + info->gpr_offset);
+
       if (info->num_gprs || return_p)
 	return gen_rtx_REG (mode, gpr_base + info->gpr_offset);
     }
@@ -7878,6 +7919,20 @@ riscv_arg_partial_bytes (cumulative_args_t cum,
   riscv_get_arg_info (&arg, get_cumulative_args (cum), generic_arg.mode,
 		      generic_arg.type, generic_arg.named, false);
   return arg.stack_p ? arg.num_gprs * UNITS_PER_WORD : 0;
+}
+
+/* Implement TARGET_ARG_PARTIAL_BYTES_AT_END_P.  */
+
+static bool
+riscv_arg_partial_bytes_at_end_p (cumulative_args_t cum,
+				  const function_arg_info &arg)
+{
+  struct riscv_arg_info info;
+
+  riscv_get_arg_info (&info, get_cumulative_args (cum), arg.mode, arg.type,
+		      arg.named, false);
+  return riscv_2xlen_scalar_split_at_end_p (&info, arg.mode, arg.type,
+					    arg.named);
 }
 
 /* Implements hook TARGET_FUNCTION_VALUE.  */
@@ -17360,6 +17415,8 @@ riscv_memtag_tag_bitsize ()
 #define TARGET_PASS_BY_REFERENCE riscv_pass_by_reference
 #undef TARGET_ARG_PARTIAL_BYTES
 #define TARGET_ARG_PARTIAL_BYTES riscv_arg_partial_bytes
+#undef TARGET_ARG_PARTIAL_BYTES_AT_END_P
+#define TARGET_ARG_PARTIAL_BYTES_AT_END_P riscv_arg_partial_bytes_at_end_p
 #undef TARGET_FUNCTION_ARG
 #define TARGET_FUNCTION_ARG riscv_function_arg
 #undef TARGET_FUNCTION_ARG_ADVANCE
