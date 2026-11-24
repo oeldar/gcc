@@ -1073,13 +1073,41 @@
 
 (define_expand "@vreinterpret<mode>"
   [(set (match_operand:VB 0 "register_operand")
-	(match_operand    1 "vector_any_register_operand"))]
+	(unspec:VB [(match_operand 1 "vector_any_register_operand")]
+		   UNSPEC_VREINTERPRET))]
   "TARGET_VECTOR"
   {
-    emit_move_insn (operands[0], gen_lowpart (<MODE>mode, operands[1]));
-    DONE;
+    if (!BYTES_BIG_ENDIAN)
+      {
+	emit_move_insn (operands[0], gen_lowpart (<MODE>mode, operands[1]));
+	DONE;
+      }
   }
 )
+
+;; RVV mask bit I is bit I of the lowest-numbered register of the group on
+;; either endianness, so a reinterpret is purely a change of register number.
+;; A generic big-endian lowpart would instead select the last bytes of the
+;; source, so keep the source in its own mode until its hard register is
+;; known and then alias that register in the mask mode.
+(define_insn_and_split "*vreinterpret<mode>"
+  [(set (match_operand:VB 0 "register_operand" "=vr")
+	(unspec:VB [(match_operand 1 "vector_any_register_operand" "vr")]
+		   UNSPEC_VREINTERPRET))]
+  "TARGET_VECTOR"
+  "#"
+  "&& reload_completed"
+  [(set (match_dup 0) (match_dup 1))]
+  {
+    if (REGNO (operands[0]) == REGNO (operands[1]))
+      {
+	emit_note (NOTE_INSN_DELETED);
+	DONE;
+      }
+    operands[1] = gen_rtx_REG (<MODE>mode, REGNO (operands[1]));
+  }
+  [(set_attr "type" "vector")
+   (set_attr "mode" "<MODE>")])
 
 ;; This pattern is used to hold the AVL operand for
 ;; RVV instructions that implicitly use VLMAX AVL.
